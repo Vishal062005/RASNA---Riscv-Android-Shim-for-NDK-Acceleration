@@ -1,0 +1,11 @@
+*.o
+*.so
+*.a
+*.class
+*.dex
+out/
+build/
+tmp/
+*.log
+*.swp
+.DS_Store

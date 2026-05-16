@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  structure:
+    name: Verify repo structure
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required files
+        run: |
+          set -e
+          required=(
+            README.md
+            .gitignore
+            setup.sh
+            run.sh
+            host/vsock_relay.c
+            arm/dispatcher.c
+            riscv/libhello_shim.c
+            java/HelloJNI.java
+            java/HelloJNI.c
+            java/HelloJNI.h
+            proto/wire.h
+          )
+          missing=0
+          for f in "${required[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "::error file=$f::missing required file"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ]
+
+      - name: Scripts are executable
+        run: |
+          set -e
+          for s in setup.sh run.sh; do
+            test -x "$s" || { echo "::error file=$s::not executable (chmod +x $s)"; exit 1; }
+          done
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Run shellcheck
+        run: shellcheck setup.sh run.sh
+
+  c-syntax:
+    name: C syntax check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install host toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc
+      - name: Syntax-check host relay
+        run: gcc -fsyntax-only -Wall -Wextra -I. host/vsock_relay.c
+      - name: Syntax-check shared wire header
+        run: |
+          cat > /tmp/wire_smoke.c <<'EOF'
+          #include "proto/wire.h"
+          int main(void) { return 0; }
+          EOF
+          gcc -fsyntax-only -Wall -I. /tmp/wire_smoke.c
