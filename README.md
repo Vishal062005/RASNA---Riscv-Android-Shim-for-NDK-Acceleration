@@ -71,37 +71,38 @@ just calls `printf`, so passing `NULL` for both is safe.
 ├── arm/
 │   ├── dispatcher.c           ARM64 dispatcher: accepts requests, dlopens libs,
 │   │                          invokes symbols, captures stdout, replies
-│   └── libhello_arm.so        Pre-built ARM64 implementation of Java_HelloJNI_sayHello
+│   └── libhello_arm.so        Rebuildable: ARM64 implementation of
+│                              Java_HelloJNI_sayHello (built by setup.sh)
 ├── riscv/
 │   ├── libhello_shim.c        RISC-V shim: provides Java_HelloJNI_sayHello,
 │   │                          which actually forwards over vsock
-│   └── libhello.so            Pre-built RISC-V shim (loaded by the JVM)
+│   └── libhello.so            Rebuildable: RISC-V shim loaded by the JVM
+│                              (built by setup.sh)
 ├── java/
 │   ├── HelloJNI.java          Java entry point (unmodified textbook JNI demo)
 │   ├── HelloJNI.c             Reference native implementation (also baked
 │   │                          into libhello_arm.so for the ARM side)
 │   ├── HelloJNI.h             JNI header
-│   └── classes.dex            Pre-built DEX (ART-loadable)
+│   └── classes.dex            Rebuildable: ART-loadable DEX (built by setup.sh)
 ├── proto/
 │   └── wire.h                 Shared wire-protocol header
 └── .github/workflows/ci.yml   CI: structure + shellcheck + C syntax checks
 ```
 
-All `*.so`, `dispatcher`, `vsock_relay`, `classes.dex`, and `*.class` files
-are **rebuildable artifacts**; they are included only as a convenience so the
-demo can run without installing the Android NDK. `setup.sh` will rebuild
-everything from source when `ANDROID_NDK_HOME` is set.
+`*.so`, `dispatcher`, `vsock_relay`, `classes.dex`, and `*.class` are
+**rebuildable artifacts** produced by `setup.sh` (see *Building the Demo*
+below). They are included in the repository as a checked-in cache so a
+freshly-cloned tree contains a complete, runnable demo; the build pipeline
+regenerates them deterministically from the source in this repository.
 
 ## Prerequisites
 
-- Linux host (Ubuntu 22.04 LTS or later), x86-64
-- KVM enabled in BIOS/UEFI and the host kernel
-- Android `adb` (from Android SDK platform-tools)
-- Standard build tools: `gcc`, `make`, `git`, `clang` (host)
-- (Optional, only to rebuild from source) Android NDK r27+ and Android SDK
-  build-tools providing `d8`
+The demo targets **Ubuntu 22.04 LTS or later** on an x86_64 host with KVM
+enabled (Intel VT-x or AMD-V). Every other dependency is installed by the
+steps that follow. Start from a clean machine with only the operating system
+installed.
 
-Copy-paste install block:
+Install the base toolchain — Git, adb, KVM/QEMU, and the C/C++ build tools:
 
 ```bash
 sudo apt update && sudo apt install -y \
@@ -110,24 +111,78 @@ sudo apt update && sudo apt install -y \
     android-sdk-platform-tools-common adb
 ```
 
+Verify the install:
+
+```bash
+git --version
+adb --version
+kvm-ok            # "KVM acceleration can be used"
+```
+
+If `kvm-ok` is not present, install it with `sudo apt install -y cpu-checker`
+and rerun.
+
+## Installing the Android NDK
+
+The Android NDK provides the cross-compilers used to build the ARM64 and
+RISC-V64 native components in this repository. Download the latest NDK
+release as a `.zip` from either of:
+
+- <https://github.com/android/ndk/releases>
+- <https://developer.android.com/ndk/downloads>
+
+Either source publishes the same artifact. Save the file to `$HOME` (e.g.
+`$HOME/android-ndk-r27c-linux.zip`), then unpack it and export the toolchain
+paths:
+
+```bash
+cd $HOME
+unzip android-ndk-*.zip -d $HOME
+export ANDROID_NDK_HOME=$HOME/android-ndk-<version>
+export PATH=$ANDROID_NDK_HOME:$PATH
+```
+
+Replace `<version>` with the directory name produced by `unzip` (e.g.
+`android-ndk-r27c`). Make the two `export` lines permanent by appending them
+to your shell startup file:
+
+```bash
+cat >> ~/.bashrc <<'EOF'
+export ANDROID_NDK_HOME=$HOME/android-ndk-<version>
+export PATH=$ANDROID_NDK_HOME:$PATH
+EOF
+source ~/.bashrc
+```
+
+Adjust the `<version>` string to match the file you downloaded. Confirm the
+NDK is reachable:
+
+```bash
+ls $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang
+ls $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/riscv64-linux-android35-clang
+```
+
+Both binaries must exist. The RISC-V cross-compiler is present only in NDK
+r27 and later, so use a recent release.
+
 ## Installing Android Cuttlefish
 
 [Cuttlefish](https://source.android.com/docs/devices/cuttlefish) is Google's
 official virtual-device platform for running full Android system images on
-Linux. It uses crosvm/QEMU under KVM and exposes each guest over `adb`, `vsock`,
-and a WebRTC console. The procedure below builds Cuttlefish from source so
-both ARM64 and RISC-V64 guest support is available.
+Linux under KVM. It is built from source on the host and exposes each guest
+over `adb`, `vsock`, and a WebRTC console.
 
-**Step 1 — Verify virtualization support.** KVM must be enabled:
+**Step 1 — Verify virtualization support.** KVM must be enabled in BIOS/UEFI
+and visible to the host kernel:
 
 ```bash
-grep -c -w "vmx\|svm" /proc/cpuinfo
+grep -cE 'vmx|svm' /proc/cpuinfo
 ```
 
-This must return a non-zero value. If it returns `0`, enable VT-x/AMD-V in
-BIOS/UEFI and re-check.
+This must return a non-zero value. If it returns `0`, enable VT-x (Intel) or
+AMD-V (AMD) in BIOS/UEFI and re-check.
 
-**Step 2 — Install build dependencies:**
+**Step 2 — Install Cuttlefish build dependencies:**
 
 ```bash
 sudo apt update
@@ -144,74 +199,134 @@ cd android-cuttlefish
 tools/buildutils/build_packages.sh
 sudo dpkg -i ./cuttlefish-base_*_*64.deb || sudo apt-get install -f
 sudo dpkg -i ./cuttlefish-user_*_*64.deb || sudo apt-get install -f
-sudo usermod -aG kvm,cvdnetwork,render "$USER"
+sudo usermod -aG kvm,cvdnetwork,render $USER
 sudo reboot
 ```
 
-> **NOTE — RAM-shortage workaround.** `build_packages.sh` is RAM-heavy
-> (peak ~16–20 GB) and can OOM-kill on smaller machines. On such systems,
-> build each Debian package individually instead. From inside each of the
-> `base/`, `frontend/`, and `user/` package folders run:
+> **NOTE — RAM-shortage workaround.** `tools/buildutils/build_packages.sh`
+> is RAM-heavy (peak ~16–20 GB) and may OOM-kill on smaller machines. On
+> such systems, build each Debian package individually instead. From inside
+> each of the `base/`, `frontend/`, and `user/` package folders run:
 >
 > ```bash
 > debuild -i -us -uc -b
 > ```
 >
-> then `sudo dpkg -i` the resulting `.deb` files in order: `base` → `user`
-> (and `frontend` if you need the web UI).
+> Then `sudo dpkg -i` the resulting `.deb` files in the same order
+> (`base` → `user` → `frontend`).
 
-**Step 4 — Download Cuttlefish images.** Obtain device images for the two
-target ISAs (ARM64 and RISC-V64) and the matching host package from
-<http://ci.android.com/>. From the **Artifacts** section of a recent
-`aosp-main` build, download:
+After the reboot, confirm group membership took effect:
 
-- `cvd-host_package.tar.gz` — host-side tooling (`cvd`, `launch_cvd`, `adb`, …)
-- `aosp_cf_arm64_only_phone-img-xxxxxxx.zip` — ARM64 system image
-- `aosp_cf_riscv64_phone-img-xxxxxxx.zip` — RISC-V64 system image
+```bash
+id $USER     # must list kvm, cvdnetwork, render
+```
 
-Decompress each archive into its own directory; both must be the same
-build number for the host package to work correctly. As an alternative,
-follow the official Cuttlefish documentation at
+**Step 4 — Download Cuttlefish images.** Cuttlefish needs two artifacts per
+target ISA: the AOSP system image archive and the Cuttlefish host package
+archive. Obtain them for the **RISC-V64** and **ARM64** Android targets
+from <http://ci.android.com/>:
+
+1. Pick a recent successful build of `aosp-main` (or the most recent
+   release branch you want to track).
+2. From the **Artifacts** section of that build, download:
+   - `cvd-host_package.tar.gz` — host-side tooling (`launch_cvd`, `cvd`,
+     `adb`, etc.)
+   - `aosp_cf_arm64_only_phone-img-xxxxxxx.zip` — ARM64 system image
+   - `aosp_cf_riscv64_phone-img-xxxxxxx.zip` — RISC-V64 system image
+3. Decompress each archive into its own per-ISA directory. The directory
+   layout below is what the launch commands in the next section assume:
+
+```bash
+mkdir -p ~/img_files/arm ~/img_files/riscv
+
+# RISC-V image set
+cd ~/img_files/riscv
+unzip ~/Downloads/aosp_cf_riscv64_phone-img-*.zip
+tar xf ~/Downloads/cvd-host_package.tar.gz     # extracts bin/, etc/, lib64/, ...
+
+# ARM image set
+cd ~/img_files/arm
+unzip ~/Downloads/aosp_cf_arm64_only_phone-img-*.zip
+tar xf ~/Downloads/cvd-host_package.tar.gz
+```
+
+Use the host package from the same build number as the matching image
+archive. As an alternative to ci.android.com you may follow the official
+documentation at
 <https://source.android.com/docs/devices/cuttlefish/get-started>.
 
-## Creating RISC-V64 and ARM64 Virtual Devices
+## Creating and Launching RISC-V64 and ARM64 Virtual Devices
 
-With the host packages installed and the images downloaded, create two
-instances — one per ISA — each with its own image directory:
+Each guest is launched from inside its own extracted Cuttlefish host package
+directory (the directory that contains `bin/launch_cvd`), with its system
+image files placed alongside in the same directory. The two VMs run as
+separate Cuttlefish instances using `CUTTLEFISH_INSTANCE=1` for the RISC-V
+guest and `CUTTLEFISH_INSTANCE=2` for the ARM guest, so they coexist on the
+same host without colliding over ports or VSOCK CIDs.
+
+**On the host — launch the RISC-V64 guest:**
 
 ```bash
-# Run on the host
-cvd create --system_image_dir <path-to-riscv-image-dir> --instance_name riscv
-cvd create --system_image_dir <path-to-arm-image-dir>   --instance_name arm
+cd /path/to/img_files/riscv
+HOME=$(pwd) \
+PWD=/path/to/img_files/riscv \
+CUTTLEFISH_INSTANCE=1 \
+./bin/launch_cvd \
+    --daemon \
+    --config=phone \
+    --vm_manager=qemu_cli
 ```
 
-Identify the VSOCK CID assigned to each guest from its runtime config:
+**On the host — launch the ARM64 guest:**
 
 ```bash
-# The CIDs are recorded in cuttlefish_config.json after launch.
+cd /path/to/img_files/arm
+HOME=$(pwd) \
+PWD=/path/to/img_files/arm \
+CUTTLEFISH_INSTANCE=2 \
+./bin/launch_cvd \
+    --daemon \
+    --config=phone \
+    --vm_manager=qemu_cli
+```
+
+Replace `/path/to/img_files/...` with the actual directories where you
+extracted the respective image and host-package archives. The flags mean:
+
+| Flag                     | Meaning                                              |
+|--------------------------|------------------------------------------------------|
+| `--daemon`               | Run the VM in the background; return control after boot |
+| `--config=phone`         | Use the standard Cuttlefish *phone* device profile   |
+| `--vm_manager=qemu_cli`  | Back the guest with QEMU (the form that supports cross-ISA targets out of the box) |
+
+`HOME=$(pwd)` and `PWD=...` ensure Cuttlefish creates its `cuttlefish/`
+runtime tree inside the image directory rather than inside the calling
+user's `$HOME`, which keeps the two instances cleanly separated.
+
+Boot typically takes 30–90 seconds per instance. Once both guests are up,
+identify their VSOCK CIDs and adb serials:
+
+```bash
+# CIDs assigned by Cuttlefish (read from each instance's config)
 jq '.instances[] | {name: .instance_name, cid: .vsock_guest_cid}' \
-    ~/cuttlefish_runtime/cuttlefish_config.json
+    /path/to/img_files/riscv/cuttlefish_runtime/cuttlefish_config.json
+jq '.instances[] | {name: .instance_name, cid: .vsock_guest_cid}' \
+    /path/to/img_files/arm/cuttlefish_runtime/cuttlefish_config.json
+
+# adb serials — instance 1 → 0.0.0.0:6520, instance 2 → 0.0.0.0:6521
+adb devices
 ```
 
-By default the demo expects RISC-V CID = 3 and ARM64 CID = 4 (the relay
-hard-codes ARM CID 4 in `host/vsock_relay.c`; the shim hard-codes the host
-relay address as CID 2 / port 9999 from inside any guest). If your CIDs
-differ, edit the constants at the top of `host/vsock_relay.c` and
-`riscv/libhello_shim.c` and rebuild, or pass matching `--vsock_guest_cid`
-flags to `cvd create`.
-
-Confirm both guests are reachable over `adb`:
+The demo assumes RISC-V CID = 3 and ARM CID = 4 (these are the defaults for
+instances 1 and 2). Connect to each guest individually:
 
 ```bash
-adb devices
-# Expected: two entries, typically 0.0.0.0:6520 (RISC-V) and 0.0.0.0:6521 (ARM)
-
 adb -s 0.0.0.0:6520 shell getprop ro.product.cpu.abi   # → riscv64
 adb -s 0.0.0.0:6521 shell getprop ro.product.cpu.abi   # → arm64-v8a
 ```
 
-If the serials differ in your installation, export them before running the
-demo scripts:
+If your installation produces different serials, export them so the demo
+scripts pick them up:
 
 ```bash
 export ADB_RISCV_SERIAL=0.0.0.0:6520
@@ -220,19 +335,18 @@ export ADB_ARM_SERIAL=0.0.0.0:6521
 
 ## Building the Demo
 
-The repository ships with pre-built binaries (`*.so`, `classes.dex`,
-`dispatcher`, `vsock_relay`) so the demo can run without rebuilding. To
-rebuild from source, set `ANDROID_NDK_HOME` (and optionally `ANDROID_HOME`
-for `d8`) and run:
+With `ANDROID_NDK_HOME` set from the *Installing the Android NDK* section,
+clone the repository (if you haven't already) and run `setup.sh`. It builds
+every native component using the NDK cross-compilers and produces the DEX
+artifact with `d8` from the Android SDK build-tools.
 
 ```bash
-# On the host
-export ANDROID_NDK_HOME=/path/to/android-ndk-r27c
-export ANDROID_HOME=$HOME/Android/Sdk      # only needed for d8
+git clone <this-repo-url> jni-offload-demo
+cd jni-offload-demo
 ./setup.sh
 ```
 
-`setup.sh` produces, in this order:
+`setup.sh` produces, in order:
 
 | Artifact                | Toolchain                                  | Target          |
 |-------------------------|--------------------------------------------|-----------------|
@@ -243,52 +357,72 @@ export ANDROID_HOME=$HOME/Android/Sdk      # only needed for d8
 | `java/HelloJNI.class`   | host `javac`                               | JVM bytecode    |
 | `java/classes.dex`      | `d8` from SDK build-tools                  | ART DEX         |
 
-If `ANDROID_NDK_HOME` is unset, `setup.sh` verifies all pre-built artifacts
-are present and skips the build step. If neither the NDK nor the pre-built
-artifacts are available, the script fails with a clear message listing the
-missing files.
+If `d8` is not yet installed, fetch the Android SDK command-line tools and
+use them to install build-tools:
+
+```bash
+mkdir -p $HOME/Android/Sdk/cmdline-tools
+cd $HOME/Android/Sdk/cmdline-tools
+curl -O https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+unzip commandlinetools-linux-*.zip
+mv cmdline-tools latest
+export ANDROID_HOME=$HOME/Android/Sdk
+yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;36.0.0"
+echo 'export ANDROID_HOME=$HOME/Android/Sdk' >> ~/.bashrc
+source ~/.bashrc
+```
+
+After `setup.sh` finishes, every file in the *Repository Layout* table
+marked **Rebuildable** has been regenerated in place from this repository's
+source.
 
 ## Running the Demo
 
-End-to-end procedure, top to bottom:
+The end-to-end procedure is three commands on the host. Both Cuttlefish VMs
+must already be running (see *Creating and Launching RISC-V64 and ARM64
+Virtual Devices*).
 
 ```bash
-# On the host: ensure both Cuttlefish VMs are running.
-cvd start --instance_name riscv
-cvd start --instance_name arm
-adb devices   # confirm both serials are visible
+# On the host — confirm both guests are visible
+adb devices
 
-# On the host: build (or skip build) and deploy.
-./setup.sh    # rebuilds artifacts (if NDK is set), roots both guests,
-              # disables SELinux enforcement, pushes dispatcher +
-              # libhello_arm.so to ARM, pushes libhello.so + classes.dex
-              # to RISC-V, starts host vsock_relay, starts ARM dispatcher.
+# On the host — build, deploy, start dispatcher + relay
+./setup.sh
 
-# On the host: invoke the Java app on the RISC-V guest.
-./run.sh      # tails ARM + RISC-V logcat, runs HelloJNI via app_process,
-              # prints all three log streams, asserts success criteria.
+# On the host — invoke the Java app on the RISC-V guest, collect logs
+./run.sh
 ```
 
-`run.sh` performs the actual invocation by ssh-ing into the RISC-V guest
-through adb and running:
+What each phase does:
 
-```bash
-# Executed inside the RISC-V guest (run.sh does this for you)
-CLASSPATH=/data/local/tmp/classes.dex \
-LD_LIBRARY_PATH=/data/local/tmp \
-app_process -Djava.library.path=/data/local/tmp / HelloJNI
-```
+- **`./setup.sh`** rebuilds all artifacts via the NDK; roots both guests
+  and switches SELinux to permissive (the shell domain is otherwise denied
+  `AF_VSOCK`); pushes `dispatcher` + `libhello_arm.so` to
+  `/data/local/tmp/` on the ARM guest and starts the dispatcher; pushes
+  `libhello.so` + `classes.dex` to `/data/local/tmp/` on the RISC-V guest;
+  launches the host-side `vsock_relay`.
+- **`./run.sh`** tails `JNI_DISPATCHER` logcat on ARM and `JNI_SHIM` logcat
+  on RISC-V, then invokes the Java app inside the RISC-V guest:
 
-`app_process` is the standard ART entry point used by `zygote`; it loads
-`HelloJNI` from the dex, which triggers `System.loadLibrary("hello")` →
-`dlopen("libhello.so")` → the shim. The shim then issues the cross-ISA
-JNI call. If `app_process` fails, the script falls back to `dalvikvm`.
+  ```bash
+  # Executed by run.sh on the RISC-V guest (shown for reference)
+  CLASSPATH=/data/local/tmp/classes.dex \
+  LD_LIBRARY_PATH=/data/local/tmp \
+  app_process -Djava.library.path=/data/local/tmp / HelloJNI
+  ```
+
+  `app_process` is the standard ART entry point. Loading `HelloJNI`
+  triggers `System.loadLibrary("hello")` → `dlopen("libhello.so")` → the
+  shim. The shim then issues the cross-ISA JNI call. `run.sh` prints the
+  three collected log streams and then checks that every required line
+  appears (relay INVOKE/REPLY frames, ARM `dlopen` + captured payload,
+  RISC-V shim ack, clean exit).
 
 ## Expected Output
 
-When successful, `run.sh` prints the three log streams it collected
-(host relay, ARM dispatcher logcat, RISC-V shim logcat), followed by the
-RISC-V process's stdout. A condensed, idealised trace looks like this:
+When the demo succeeds, `run.sh` prints all three log streams and ends with
+`ALL CHECKS PASSED`. A condensed, idealised trace looks like this:
 
 ```
 [RISC-V JVM]        Invoking HelloJNI.sayHello()
@@ -299,9 +433,8 @@ RISC-V process's stdout. A condensed, idealised trace looks like this:
 [RISC-V JVM]        Result: Hello from ARM64!
 ```
 
-Actual logs in `logs/` (after a run) will contain the framed wire details
-— request IDs, library and symbol names, captured byte counts — for
-example:
+The actual collected logs in `logs/` contain the framed wire details —
+request IDs, library and symbol names, captured byte counts — for example:
 
 ```
 [relay] INVOKE req_id=1  lib=libhello_arm.so  sym=Java_HelloJNI_sayHello  sig=()V  arg_len=0  (CID3→CID4)
@@ -312,58 +445,43 @@ JNI_DISPATCHER: captured 13 bytes of stdout: Hello World!
 JNI_SHIM:       reply ok req_id=1 retdesc='s' ret_len=13 payload: Hello World!
 ```
 
-`run.sh` ends with an explicit `ALL CHECKS PASSED` line if every assertion
-holds.
-
-## Troubleshooting
-
-**`grep -c -w "vmx\|svm" /proc/cpuinfo` returns 0.** KVM is not available.
-Enable VT-x (Intel) or AMD-V in BIOS/UEFI, then verify `kvm-ok` reports
-"KVM acceleration can be used".
-
-**`build_packages.sh` is killed by OOM.** Drop down to building each Debian
-package individually with `debuild -i -us -uc -b` inside `base/`, `user/`,
-and `frontend/` (see the NOTE under *Installing Android Cuttlefish*). A swap
-file of 16 GB+ also helps if RAM is tight.
-
-**`adb` cannot see one of the guests.** Confirm `kvm`, `cvdnetwork`, and
-`render` group membership took effect (`id $USER`); a reboot is required
-after `usermod -aG`. Also confirm `cvd start` reports success and that the
-guest finished booting — initial boot can take 30–90 s on slower hosts.
-
-**`setup.sh` fails with `RISC-V CID is N, expected 3` (or ARM CID mismatch).**
-Cuttlefish does not always honour `--vsock_guest_cid` predictably. Either
-re-launch with explicit CIDs, or edit the CID constants in
-`host/vsock_relay.c` and `riscv/libhello_shim.c` and rebuild.
-
-**`adb root` fails.** The system image must be userdebug or eng — user
-builds reject `adb root`. Re-download the correct artifact from
-ci.android.com if needed.
-
-**`socket(AF_VSOCK)` returns `EAFNOSUPPORT`.** The host kernel needs
-`CONFIG_VHOST_VSOCK=y` (or the `vhost_vsock` module loaded:
-`sudo modprobe vhost_vsock`). The guest kernels in stock Cuttlefish images
-already include `CONFIG_VSOCKETS=y`.
-
-**ART rejects `classes.dex` with a verification error.** Rebuild with a
-matching `d8` from `${ANDROID_HOME}/build-tools/<version>/`. Mismatches
-between very old `d8` and newer Cuttlefish images are the usual cause.
-
 ## Cleaning Up
 
+Stop the host-side daemons and on-guest dispatcher:
+
 ```bash
-# Stop the host-side daemons
-kill "$(cat .relay.pid)"        2>/dev/null || true
+# Kill the host vsock_relay
+kill "$(cat .relay.pid)" 2>/dev/null || true
 rm -f .relay.pid .dispatcher.pid
 
-# Stop the on-guest dispatcher
+# Kill the on-guest dispatcher
 adb -s "${ADB_ARM_SERIAL:-0.0.0.0:6521}" shell pkill -f dispatcher || true
+```
 
-# Stop both Cuttlefish VMs
-cvd stop --instance_name riscv
-cvd stop --instance_name arm
+Stop both Cuttlefish instances. Run each command from the same directory
+the instance was launched in:
 
-# Remove rebuildable artifacts and logs
+```bash
+# RISC-V guest (instance 1)
+cd /path/to/img_files/riscv
+HOME=$(pwd) CUTTLEFISH_INSTANCE=1 ./bin/stop_cvd
+
+# ARM guest (instance 2)
+cd /path/to/img_files/arm
+HOME=$(pwd) CUTTLEFISH_INSTANCE=2 ./bin/stop_cvd
+```
+
+Remove the per-instance runtime trees if you want a fully clean restart:
+
+```bash
+rm -rf /path/to/img_files/riscv/cuttlefish_runtime*
+rm -rf /path/to/img_files/arm/cuttlefish_runtime*
+cvd remove --all 2>/dev/null || true
+```
+
+Remove the rebuildable artifacts and per-run logs from this repository:
+
+```bash
 rm -f host/vsock_relay arm/dispatcher \
       arm/libhello_arm.so riscv/libhello.so \
       java/HelloJNI.class java/classes.dex
@@ -378,45 +496,17 @@ rm -rf logs/
   using a hosted JVM on the ARM side.
 - **String and object return values.** The wire format already carries a
   `retdesc` byte (`'V'` for void, `'s'` for byte blob). Adding `'I'`/`'J'`
-  for ints/longs and `'L'` for full Java objects (with a per-call serialiser)
-  is straightforward.
+  for ints/longs and `'L'` for full Java objects (with a per-call
+  serialiser) is a straightforward extension.
 - **Connection reuse and reconnection.** The current dispatcher opens a
-  fresh connection per request from the relay; pooling would reduce per-call
-  latency. A reconnection state machine (`READY → DISCONNECTED → BACKING_OFF
-  → CONNECTING → READY`) would survive transient ARM-side failures
-  transparently to the JVM.
+  fresh connection per request from the relay; pooling would reduce
+  per-call latency. A reconnection state machine
+  (`READY → DISCONNECTED → BACKING_OFF → CONNECTING → READY`) would
+  survive transient ARM-side failures transparently to the JVM.
 - **Performance measurement.** End-to-end latency, throughput, and the
-  fraction spent in vsock vs. dlopen vs. function execution have not been
-  characterised.
-- **Other ISA pairings.** Nothing in the design is RISC-V- or ARM-specific;
-  the same mechanism should work for x86_64 ↔ ARM64 or x86_64 ↔ RISC-V64
-  with only toolchain changes.
-
-## License
-
-This project is released under the MIT License. See `LICENSE` (TBD) for the
-full text.
-
-```
-MIT License
-
-Copyright (c) 2026 The Heterogeneous-ISA JNI Offloading Demo Authors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-```
+  fraction of time spent in vsock vs. `dlopen` vs. function execution have
+  not been characterised. A microbenchmark harness driven from `run.sh`
+  would close this gap.
+- **Other ISA pairings.** Nothing in the design is RISC-V- or
+  ARM-specific; the same mechanism should work for x86_64 ↔ ARM64 or
+  x86_64 ↔ RISC-V64 with only toolchain changes.
