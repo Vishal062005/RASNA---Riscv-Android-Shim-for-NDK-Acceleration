@@ -2,15 +2,15 @@
 
 A reproducible proof-of-concept that transparently executes a Java Native
 Interface (JNI) call on a CPU of a **different instruction-set architecture**
-than the one running the JVM. A `HelloJNI.sayHello()` invocation on a RISC-V64
+than the one running the JVM. A `HelloJNI.sayHello()` invocation on a riscv64
 Android virtual device is forwarded over `AF_VSOCK` to an ARM64 Android virtual
 device, where the real native code runs, and the captured result is returned
-to the original RISC-V process — all without modifying the Java application.
+to the original riscv process — all without modifying the Java application.
 
 ## Overview
 
 A textbook Java program (`HelloJNI.java`) calls a native method through
-`System.loadLibrary("hello")`. The library it loads on the RISC-V guest is
+`System.loadLibrary("hello")`. The library it loads on the riscv guest is
 **not** the implementation of the native method — it is a *shim* that
 serialises the call (library name, symbol name, JNI signature) onto a vsock
 stream. A relay on the Linux host forwards the request to an ARM64 guest,
@@ -29,7 +29,7 @@ JNI ABI, and Linux AF_VSOCK.
 
 ```mermaid
 flowchart LR
-    subgraph RV["RISC-V64 Cuttlefish Guest"]
+    subgraph RV["riscv64 Cuttlefish Guest"]
         APP["HelloJNI.java<br/>(app_process / ART)"]
         SHIM["libhello.so<br/>(JNI shim)"]
         APP -- "System.loadLibrary + sayHello()" --> SHIM
@@ -65,7 +65,7 @@ just calls `printf`, so passing `NULL` for both is safe.
 ├── README.md                  This file
 ├── .gitignore                 Excludes build artifacts and logs
 ├── setup.sh                   Builds, deploys, and starts the dispatcher + relay
-├── run.sh                     Executes HelloJNI on RISC-V and collects logs
+├── run.sh                     Executes HelloJNI on riscv and collects logs
 ├── host/
 │   └── vsock_relay.c          Host-side AF_VSOCK relay (forwards CID 3 → CID 4)
 ├── arm/
@@ -74,9 +74,9 @@ just calls `printf`, so passing `NULL` for both is safe.
 │   └── libhello_arm.so        Rebuildable: ARM64 implementation of
 │                              Java_HelloJNI_sayHello (built by setup.sh)
 ├── riscv/
-│   ├── libhello_shim.c        RISC-V shim: provides Java_HelloJNI_sayHello,
+│   ├── libhello_shim.c        riscv shim: provides Java_HelloJNI_sayHello,
 │   │                          which actually forwards over vsock
-│   └── libhello.so            Rebuildable: RISC-V shim loaded by the JVM
+│   └── libhello.so            Rebuildable: riscv shim loaded by the JVM
 │                              (built by setup.sh)
 ├── java/
 │   ├── HelloJNI.java          Java entry point (unmodified textbook JNI demo)
@@ -125,7 +125,7 @@ and rerun.
 ## Installing the Android NDK
 
 The Android NDK provides the cross-compilers used to build the ARM64 and
-RISC-V64 native components in this repository. Download the latest NDK
+riscv64 native components in this repository. Download the latest NDK
 release as a `.zip` from either of:
 
 - <https://github.com/android/ndk/releases>
@@ -162,7 +162,7 @@ ls $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-and
 ls $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/riscv64-linux-android35-clang
 ```
 
-Both binaries must exist. The RISC-V cross-compiler is present only in NDK
+Both binaries must exist. The riscv cross-compiler is present only in NDK
 r27 and later, so use a recent release.
 
 ## Installing Android Cuttlefish
@@ -223,7 +223,7 @@ id $USER     # must list kvm, cvdnetwork, render
 
 **Step 4 — Download Cuttlefish images.** Cuttlefish needs two artifacts per
 target ISA: the AOSP system image archive and the Cuttlefish host package
-archive. Obtain them for the **RISC-V64** and **ARM64** Android targets
+archive. Obtain them for the **riscv64** and **ARM64** Android targets
 from <http://ci.android.com/>:
 
 1. Pick a recent successful build of `aosp-main` (or the most recent
@@ -232,14 +232,14 @@ from <http://ci.android.com/>:
    - `cvd-host_package.tar.gz` — host-side tooling (`launch_cvd`, `cvd`,
      `adb`, etc.)
    - `aosp_cf_arm64_only_phone-img-xxxxxxx.zip` — ARM64 system image
-   - `aosp_cf_riscv64_phone-img-xxxxxxx.zip` — RISC-V64 system image
+   - `aosp_cf_riscv64_phone-img-xxxxxxx.zip` — riscv64 system image
 3. Decompress each archive into its own per-ISA directory. The directory
    layout below is what the launch commands in the next section assume:
 
 ```bash
 mkdir -p ~/img_files/arm ~/img_files/riscv
 
-# RISC-V image set
+# riscv image set
 cd ~/img_files/riscv
 unzip ~/Downloads/aosp_cf_riscv64_phone-img-*.zip
 tar xf ~/Downloads/cvd-host_package.tar.gz     # extracts bin/, etc/, lib64/, ...
@@ -255,16 +255,16 @@ archive. As an alternative to ci.android.com you may follow the official
 documentation at
 <https://source.android.com/docs/devices/cuttlefish/get-started>.
 
-## Creating and Launching RISC-V64 and ARM64 Virtual Devices
+## Creating and Launching riscv64 and ARM64 Virtual Devices
 
 Each guest is launched from inside its own extracted Cuttlefish host package
 directory (the directory that contains `bin/launch_cvd`), with its system
 image files placed alongside in the same directory. The two VMs run as
-separate Cuttlefish instances using `CUTTLEFISH_INSTANCE=1` for the RISC-V
+separate Cuttlefish instances using `CUTTLEFISH_INSTANCE=1` for the riscv
 guest and `CUTTLEFISH_INSTANCE=2` for the ARM guest, so they coexist on the
 same host without colliding over ports or VSOCK CIDs.
 
-**On the host — launch the RISC-V64 guest:**
+**On the host — launch the riscv64 guest:**
 
 ```bash
 cd /path/to/img_files/riscv
@@ -317,7 +317,7 @@ jq '.instances[] | {name: .instance_name, cid: .vsock_guest_cid}' \
 adb devices
 ```
 
-The demo assumes RISC-V CID = 3 and ARM CID = 4 (these are the defaults for
+The demo assumes riscv CID = 3 and ARM CID = 4 (these are the defaults for
 instances 1 and 2). Connect to each guest individually:
 
 ```bash
@@ -353,7 +353,7 @@ cd jni-offload-demo
 | `host/vsock_relay`      | host `gcc`                                 | x86_64 Linux    |
 | `arm/dispatcher`        | `aarch64-linux-android34-clang` (NDK)      | ARM64 Android   |
 | `arm/libhello_arm.so`   | `aarch64-linux-android34-clang` (NDK)      | ARM64 Android   |
-| `riscv/libhello.so`     | `riscv64-linux-android35-clang` (NDK r27+) | RISC-V64 Android|
+| `riscv/libhello.so`     | `riscv64-linux-android35-clang` (NDK r27+) | riscv64 Android|
 | `java/HelloJNI.class`   | host `javac`                               | JVM bytecode    |
 | `java/classes.dex`      | `d8` from SDK build-tools                  | ART DEX         |
 
@@ -380,7 +380,7 @@ source.
 ## Running the Demo
 
 The end-to-end procedure is three commands on the host. Both Cuttlefish VMs
-must already be running (see *Creating and Launching RISC-V64 and ARM64
+must already be running (see *Creating and Launching riscv64 and ARM64
 Virtual Devices*).
 
 ```bash
@@ -390,7 +390,7 @@ adb devices
 # On the host — build, deploy, start dispatcher + relay
 ./setup.sh
 
-# On the host — invoke the Java app on the RISC-V guest, collect logs
+# On the host — invoke the Java app on the riscv guest, collect logs
 ./run.sh
 ```
 
@@ -400,13 +400,13 @@ What each phase does:
   and switches SELinux to permissive (the shell domain is otherwise denied
   `AF_VSOCK`); pushes `dispatcher` + `libhello_arm.so` to
   `/data/local/tmp/` on the ARM guest and starts the dispatcher; pushes
-  `libhello.so` + `classes.dex` to `/data/local/tmp/` on the RISC-V guest;
+  `libhello.so` + `classes.dex` to `/data/local/tmp/` on the riscv guest;
   launches the host-side `vsock_relay`.
 - **`./run.sh`** tails `JNI_DISPATCHER` logcat on ARM and `JNI_SHIM` logcat
-  on RISC-V, then invokes the Java app inside the RISC-V guest:
+  on riscv, then invokes the Java app inside the riscv guest:
 
   ```bash
-  # Executed by run.sh on the RISC-V guest (shown for reference)
+  # Executed by run.sh on the riscv guest (shown for reference)
   CLASSPATH=/data/local/tmp/classes.dex \
   LD_LIBRARY_PATH=/data/local/tmp \
   app_process -Djava.library.path=/data/local/tmp / HelloJNI
@@ -417,7 +417,7 @@ What each phase does:
   shim. The shim then issues the cross-ISA JNI call. `run.sh` prints the
   three collected log streams and then checks that every required line
   appears (relay INVOKE/REPLY frames, ARM `dlopen` + captured payload,
-  RISC-V shim ack, clean exit).
+  riscv shim ack, clean exit).
 
 ## Expected Output
 
@@ -425,12 +425,12 @@ When the demo succeeds, `run.sh` prints all three log streams and ends with
 `ALL CHECKS PASSED`. A condensed, idealised trace looks like this:
 
 ```
-[RISC-V JVM]        Invoking HelloJNI.sayHello()
-[RISC-V Shim]       Forwarding request over VSOCK
+[riscv JVM]        Invoking HelloJNI.sayHello()
+[riscv Shim]       Forwarding request over VSOCK
 [Host Relay]        Forwarding to ARM guest
 [ARM Dispatcher]    Loading libhello_arm.so
 [ARM Native]        Hello from ARM64!
-[RISC-V JVM]        Result: Hello from ARM64!
+[riscv JVM]        Result: Hello from ARM64!
 ```
 
 The actual collected logs in `logs/` contain the framed wire details —
@@ -462,7 +462,7 @@ Stop both Cuttlefish instances. Run each command from the same directory
 the instance was launched in:
 
 ```bash
-# RISC-V guest (instance 1)
+# riscv guest (instance 1)
 cd /path/to/img_files/riscv
 HOME=$(pwd) CUTTLEFISH_INSTANCE=1 ./bin/stop_cvd
 
@@ -498,15 +498,6 @@ rm -rf logs/
   `retdesc` byte (`'V'` for void, `'s'` for byte blob). Adding `'I'`/`'J'`
   for ints/longs and `'L'` for full Java objects (with a per-call
   serialiser) is a straightforward extension.
-- **Connection reuse and reconnection.** The current dispatcher opens a
-  fresh connection per request from the relay; pooling would reduce
-  per-call latency. A reconnection state machine
-  (`READY → DISCONNECTED → BACKING_OFF → CONNECTING → READY`) would
-  survive transient ARM-side failures transparently to the JVM.
-- **Performance measurement.** End-to-end latency, throughput, and the
-  fraction of time spent in vsock vs. `dlopen` vs. function execution have
-  not been characterised. A microbenchmark harness driven from `run.sh`
-  would close this gap.
-- **Other ISA pairings.** Nothing in the design is RISC-V- or
-  ARM-specific; the same mechanism should work for x86_64 ↔ ARM64 or
-  x86_64 ↔ RISC-V64 with only toolchain changes.
+- **Syscall servicing from the ARM guest** — Forward system calls made
+  by offloaded ARM native code back to the RISCV guest, so the ARM VM
+  can transparently service syscalls in the original process context.
