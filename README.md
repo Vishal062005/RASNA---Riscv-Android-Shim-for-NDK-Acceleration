@@ -525,5 +525,5 @@ rm -rf logs/
   ## Presentation and Report links
 
 - [Presentation link](https://drive.google.com/file/d/1j5iQn5HDWRX5N41c-xOY4RwuvElE-cQ2/view)
-- [Presentation_slides](https://drive.google.com/file/d/1Uc8ciAYkJ2ZMRZX_LX1eDB0dvYtpmcmA/view?usp=sharing)
-- [Report](https://drive.google.com/file/d/1J2xDphsbzw3tQUT-TT8PyvIrMO1nRapJ/view?usp=sharing)
+- [Presentation_slides](https://drive.google.com/file/d/1PQSgHY_ihqysC-Z5v8bDG_DCtWzdzrEy/view?usp=sharing)
+- [Report](https://drive.google.com/file/d/1PbHaVnw5Ug0j7cKZ4rGac7OQ9r8Zc82S/view?usp=sharing)
