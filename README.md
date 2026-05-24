@@ -65,7 +65,9 @@ just calls `printf`, so passing `NULL` for both is safe.
 ├── README.md                  This file
 ├── .gitignore                 Excludes build artifacts and logs
 ├── setup.sh                   Builds, deploys, and starts the dispatcher + relay
-├── run.sh                     Executes HelloJNI on riscv and collects logs
+├── live-arm.sh                Live view: streams the ARM JNI_DISPATCHER logcat
+├── live-host.sh               Live view: tails the host vsock_relay log
+├── live-riscv.sh              Live driver: runs HelloJNI + streams JNI_SHIM logcat
 ├── host/
 │   └── vsock_relay.c          Host-side AF_VSOCK relay (forwards CID 3 → CID 4)
 ├── arm/
@@ -379,9 +381,10 @@ source.
 
 ## Running the Demo
 
-The end-to-end procedure is three commands on the host. Both Cuttlefish VMs
-must already be running (see *Creating and Launching riscv64 and ARM64
-Virtual Devices*).
+Both Cuttlefish VMs must already be running (see *Creating and Launching
+riscv64 and ARM64 Virtual Devices*). The demo then runs in two stages:
+`setup.sh` to build, deploy, and start the backends, then the three
+`live-*.sh` scripts — one per hop — in three terminals.
 
 ```bash
 # On the host — confirm both guests are visible
@@ -389,40 +392,57 @@ adb devices
 
 # On the host — build, deploy, start dispatcher + relay
 ./setup.sh
-
-# On the host — invoke the Java app on the riscv guest, collect logs
-./run.sh
 ```
 
-What each phase does:
+**`./setup.sh`** rebuilds all artifacts via the NDK; roots both guests and
+switches SELinux to permissive (the shell domain is otherwise denied
+`AF_VSOCK`); pushes `dispatcher` + `libhello_arm.so` to `/data/local/tmp/`
+on the ARM guest and starts the dispatcher; pushes `libhello.so` +
+`classes.dex` to `/data/local/tmp/` on the riscv guest; and launches the
+host-side `vsock_relay`.
 
-- **`./setup.sh`** rebuilds all artifacts via the NDK; roots both guests
-  and switches SELinux to permissive (the shell domain is otherwise denied
-  `AF_VSOCK`); pushes `dispatcher` + `libhello_arm.so` to
-  `/data/local/tmp/` on the ARM guest and starts the dispatcher; pushes
-  `libhello.so` + `classes.dex` to `/data/local/tmp/` on the riscv guest;
-  launches the host-side `vsock_relay`.
-- **`./run.sh`** tails `JNI_DISPATCHER` logcat on ARM and `JNI_SHIM` logcat
-  on riscv, then invokes the Java app inside the riscv guest:
+With the backends up, open three terminals and run one script in each. They
+read straight from the components `setup.sh` started — the on-guest
+dispatcher, the host `vsock_relay`, and the riscv guest — so each hop of the
+cross-ISA call lights up in its own window as it happens:
 
-  ```bash
-  # Executed by run.sh on the riscv guest (shown for reference)
-  CLASSPATH=/data/local/tmp/classes.dex \
-  LD_LIBRARY_PATH=/data/local/tmp \
-  app_process -Djava.library.path=/data/local/tmp / HelloJNI
-  ```
+```bash
+# Terminal A — ARM dispatcher: adb logcat -s JNI_DISPATCHER:V on the ARM guest
+./live-arm.sh
 
-  `app_process` is the standard ART entry point. Loading `HelloJNI`
-  triggers `System.loadLibrary("hello")` → `dlopen("libhello.so")` → the
-  shim. The shim then issues the cross-ISA JNI call. `run.sh` prints the
-  three collected log streams and then checks that every required line
-  appears (relay INVOKE/REPLY frames, ARM `dlopen` + captured payload,
-  riscv shim ack, clean exit).
+# Terminal B — host relay: tail -F logs/relay.log written by vsock_relay
+./live-host.sh
+
+# Terminal C — riscv driver: runs the Java app and streams JNI_SHIM logcat
+./live-riscv.sh
+```
+
+**`./live-riscv.sh`** preflights the dispatcher (alive via `pgrep`), the relay
+(alive via `.relay.pid`), and the pushed artifacts, then invokes the Java app
+inside the riscv guest:
+
+```bash
+# Executed by live-riscv.sh on the riscv guest (shown for reference)
+CLASSPATH=/data/local/tmp/classes.dex \
+LD_LIBRARY_PATH=/data/local/tmp \
+app_process -Djava.library.path=/data/local/tmp / HelloJNI
+```
+
+`app_process` is the standard ART entry point. Loading `HelloJNI` triggers
+`System.loadLibrary("hello")` → `dlopen("libhello.so")` → the shim, which
+issues the cross-ISA JNI call. Firing it makes terminals A and B light up with
+the matching dispatcher `RECV INVOKE` / `dlopen` / `SEND REPLY` and relay
+`FWD INVOKE` / `FWD REPLY` lines. Re-run `live-riscv.sh` as often as you like —
+A and B keep streaming.
+
+The scripts honour the same environment overrides as `setup.sh`
+(`ADB_ARM_SERIAL`, `ADB_RISCV_SERIAL`, `ADB`) and auto-detect the repository
+root; set `REPO_DIR` to override it.
 
 ## Expected Output
 
-When the demo succeeds, `run.sh` prints all three log streams and ends with
-`ALL CHECKS PASSED`. A condensed, idealised trace looks like this:
+When the demo succeeds, the three terminals together trace the full path of
+the call. A condensed, idealised version looks like this:
 
 ```
 [riscv JVM]        Invoking HelloJNI.sayHello()
