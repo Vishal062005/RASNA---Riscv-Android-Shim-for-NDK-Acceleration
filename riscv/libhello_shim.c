@@ -86,7 +86,6 @@ JNIEXPORT void JNICALL Java_HelloJNI_sayHello(JNIEnv *env, jobject thiz) {
 
     wire_req_hdr_t hdr = {
         .magic   = WIRE_MAGIC,
-        .version = WIRE_VERSION,
         .req_id  = req_id,
         .op      = WIRE_OP_INVOKE,
         .flags   = 0,
