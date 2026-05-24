@@ -47,9 +47,19 @@ static int ensure_connected(void) {
         close(fd);
         return -1;
     }
-    LOGI("connected to relay CID=%u port=%u", RELAY_CID, RELAY_PORT);
     g_sock = fd;
     return 0;
+}
+
+/* Runs at library unload / process exit; emits the teardown line that mirrors
+ * the relay's "RISC-V VM closed connection" and the dispatcher's "closed". */
+__attribute__((destructor))
+static void shim_teardown(void) {
+    if (g_sock >= 0) {
+        LOGI("closing connection to HOST relay (CID %u)", RELAY_CID);
+        close(g_sock);
+        g_sock = -1;
+    }
 }
 
 JNIEXPORT void JNICALL Java_HelloJNI_sayHello(JNIEnv *env, jobject thiz) {
@@ -82,7 +92,7 @@ JNIEXPORT void JNICALL Java_HelloJNI_sayHello(JNIEnv *env, jobject thiz) {
         .flags   = 0,
     };
 
-    LOGI("sending INVOKE req_id=%u sym=%s", req_id, sym);
+    LOGI("SEND INVOKE req_id=%u sym=%s sig=%s arg_len=%u", req_id, sym, sig, arg_len);
 
     if (write_exact(g_sock, &hdr, sizeof(hdr)) < 0 ||
         write_lenstr16(g_sock, lib) < 0 ||
@@ -146,8 +156,15 @@ JNIEXPORT void JNICALL Java_HelloJNI_sayHello(JNIEnv *env, jobject thiz) {
         return;
     }
 
-    LOGI("reply ok req_id=%u retdesc='%c' ret_len=%u payload: %s",
-         reply.req_id, (char)reply.retdesc, reply.ret_len,
+    /* Trim trailing newline(s) so the captured payload prints on one line. */
+    if (ret_payload) {
+        uint32_t pl = reply.ret_len;
+        while (pl > 0 && (ret_payload[pl - 1] == '\n' || ret_payload[pl - 1] == '\r'))
+            ret_payload[--pl] = '\0';
+    }
+    LOGI("RECV REPLY  req_id=%u status=%u retdesc='%c' ret_len=%u payload: \"%s\"   "
+         "[from ARM VM(CID4) via HOST relay]",
+         reply.req_id, reply.status, (char)reply.retdesc, reply.ret_len,
          ret_payload ? (char *)ret_payload : "");
 
     free(ret_payload);

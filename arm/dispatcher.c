@@ -41,7 +41,7 @@ static void *get_lib(const char *name) {
 
     void *h = dlopen(name, RTLD_NOW | RTLD_LOCAL);
     if (!h) { LOGE("dlopen(%s) failed: %s", name, dlerror()); return NULL; }
-    LOGI("dlopen(%s) ok", name);
+    LOGI("dlopen(%s) ok   [executing locally on ARM VM(CID4)]", name);
 
     lib_entry_t *e = (lib_entry_t *)malloc(sizeof(*e));
     e->name   = strdup(name);
@@ -70,7 +70,7 @@ static int invoke_and_capture(const char *lib, const char *sym,
         snprintf(errbuf, errbufsz, "dlsym(%s): %s", sym, dlerror());
         return -1;
     }
-    LOGI("dlsym(%s) ok, invoking with NULL JNIEnv/jobject", sym);
+    LOGI("dlsym(%s) ok; invoking with NULL JNIEnv/jobject   [on ARM VM(CID4)]", sym);
 
     /* Redirect stdout to a pipe so we capture what the function prints. */
     int pipefd[2];
@@ -106,7 +106,11 @@ static int invoke_and_capture(const char *lib, const char *sym,
     }
     close(pipefd[0]);
 
-    LOGI("captured %zu bytes of stdout: %.*s", used, (int)used, (char *)buf);
+    /* Trim trailing newline(s) for a clean single-line quoted log. */
+    int show = (int)used;
+    while (show > 0 && (buf[show - 1] == '\n' || buf[show - 1] == '\r')) show--;
+    LOGI("native call returned; captured %u bytes of stdout: \"%.*s\"",
+         (unsigned)used, show, (char *)buf);
 
     *out_buf = buf;
     *out_len = (uint32_t)used;
@@ -140,7 +144,7 @@ static void handle_client(int client_fd) {
             free(tmp);
         }
 
-        LOGI("INVOKE req_id=%u lib=%s sym=%s sig=%s", hdr.req_id, lib, sym, sig);
+        LOGI("RECV INVOKE req_id=%u lib=%s sym=%s sig=%s", hdr.req_id, lib, sym, sig);
 
         wire_reply_hdr_t reply = { .req_id = hdr.req_id };
         uint8_t *out_buf = NULL;
@@ -159,6 +163,8 @@ static void handle_client(int client_fd) {
             reply.ret_len = out_buf ? (uint32_t)strlen(errbuf) : 0;
         }
 
+        LOGI("SEND REPLY  req_id=%u status=%u retdesc='%c' ret_len=%u ",
+             reply.req_id, reply.status, (char)reply.retdesc, reply.ret_len);
         write_exact(client_fd, &reply, sizeof(reply));
         if (reply.ret_len > 0) write_exact(client_fd, out_buf, reply.ret_len);
         free(out_buf);
@@ -198,9 +204,9 @@ int main(void) {
         socklen_t plen = sizeof(peer);
         int client_fd = accept(listen_fd, (struct sockaddr *)&peer, &plen);
         if (client_fd < 0) { LOGE("accept: %s", strerror(errno)); continue; }
-        LOGI("accepted connection from CID %u", peer.svm_cid);
+        LOGI("accepted vsock connection from HOST relay (CID %u);", peer.svm_cid);
         handle_client(client_fd);
-        LOGI("connection from CID %u closed", peer.svm_cid);
+        LOGI("connection from HOST relay (CID %u) closed", peer.svm_cid);
         close(client_fd);
     }
 }

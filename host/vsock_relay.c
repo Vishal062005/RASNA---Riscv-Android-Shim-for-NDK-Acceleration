@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
+#include <stdarg.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <linux/vm_sockets.h>
@@ -14,6 +16,24 @@
 #define RELAY_PORT   9999u
 #define ARM_CID      4u
 #define RISCV_CID    3u
+
+/* Millisecond-resolution timestamp + "[relay]" prefix, matching the format the
+ * demo views use so all three log streams correlate by wall-clock time. */
+static void rlog(const char *fmt, ...) {
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    struct tm tm;
+    localtime_r(&now.tv_sec, &tm);
+    char when[32];
+    strftime(when, sizeof when, "%m-%d %H:%M:%S", &tm);
+    printf("%s.%03ld [relay] ", when, now.tv_nsec / 1000000);
+    va_list ap;
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+    putchar('\n');
+    fflush(stdout);
+}
 
 static int connect_to_arm(void) {
     int fd = socket(AF_VSOCK, SOCK_STREAM, 0);
@@ -37,7 +57,7 @@ static int relay_one(int riscv_fd) {
     /* --- Read request from RISC-V --- */
     wire_req_hdr_t hdr;
     if (read_exact(riscv_fd, &hdr, sizeof(hdr)) < 0) {
-        fprintf(stderr, "[relay] failed reading req header\n");
+        /* Normal end-of-session: the RISC-V client closed the connection. */
         return -1;
     }
     if (hdr.magic != WIRE_MAGIC) {
@@ -61,9 +81,8 @@ static int relay_one(int riscv_fd) {
         if (read_exact(riscv_fd, args, arg_len) < 0) goto err;
     }
 
-    printf("[relay] INVOKE req_id=%u  lib=%s  sym=%s  sig=%s  arg_len=%u  (CID%u→CID%u)\n",
-           hdr.req_id, lib, sym, sig, arg_len, RISCV_CID, ARM_CID);
-    fflush(stdout);
+    rlog("FWD  INVOKE req_id=%u lib=%s sym=%s sig=%s arg_len=%u",
+         hdr.req_id, lib, sym, sig, arg_len);
 
     /* --- Open fresh connection to ARM and forward verbatim --- */
     int arm_fd = connect_to_arm();
@@ -95,9 +114,8 @@ static int relay_one(int riscv_fd) {
     }
     close(arm_fd);
 
-    printf("[relay] REPLY  req_id=%u  status=%u  retdesc='%c'  ret_len=%u  (CID%u→CID%u)\n",
-           rhdr.req_id, rhdr.status, (char)rhdr.retdesc, rhdr.ret_len, ARM_CID, RISCV_CID);
-    fflush(stdout);
+    rlog("FWD  REPLY  req_id=%u status=%u retdesc='%c' ret_len=%u ",
+         rhdr.req_id, rhdr.status, (char)rhdr.retdesc, rhdr.ret_len);
 
     /* --- Forward reply to RISC-V --- */
     if (write_exact(riscv_fd, &rhdr, sizeof(rhdr)) < 0) {
@@ -150,15 +168,15 @@ int main(void) {
         socklen_t plen = sizeof(peer);
         int client_fd = accept(listen_fd, (struct sockaddr *)&peer, &plen);
         if (client_fd < 0) { perror("accept"); continue; }
-        printf("[relay] accepted connection from CID %u\n", peer.svm_cid);
-        fflush(stdout);
+        rlog("──── new session ───────────────────────────────────────────────");
+        rlog("accepted vsock connection from RISC-V VM (CID %u); dialing ARM VM (CID %u) ...",
+             peer.svm_cid, ARM_CID);
 
         /* Service requests on this connection until the client closes. */
         while (relay_one(client_fd) == 0)
             ;
 
-        printf("[relay] connection from CID %u closed\n", peer.svm_cid);
-        fflush(stdout);
+        rlog("RISC-V VM (CID %u) closed connection;", peer.svm_cid);
         close(client_fd);
     }
 }

@@ -53,7 +53,8 @@ fi
 : > "$LOGS/riscv_logcat.log"
 : > "$LOGS/arm_logcat.log"
 : > "$LOGS/riscv_stdout.log"
-echo "── run $(date) ──" >> "$LOGS/relay.log"
+# The relay prints its own "──── new session ───" separator on each accept,
+# so we no longer inject a run marker here (it would duplicate that line).
 
 "${ARM_ADB[@]}"   shell logcat -c 2>/dev/null || true
 "${RISCV_ADB[@]}" shell logcat -c 2>/dev/null || true
@@ -120,7 +121,7 @@ check "Relay saw INVOKE frame"        "$LOGS/relay.log"        "Java_HelloJNI_sa
 check "Relay saw reply frame"         "$LOGS/relay.log"        "REPLY"
 check "ARM dispatcher dlopen'd lib"   "$LOGS/arm_logcat.log"   "dlopen"
 check "ARM captured Hello World"      "$LOGS/arm_logcat.log"   "Hello World"
-check "RISC-V shim got OK reply"      "$LOGS/riscv_logcat.log" "reply ok"
+check "RISC-V shim got OK reply"      "$LOGS/riscv_logcat.log" "RECV REPLY"
 check "RISC-V app exited cleanly"     "$LOGS/riscv_stdout.log" "app_process_rc=0"
 
 echo
