@@ -32,7 +32,6 @@
 /* Fixed-size header portions used for parsing. */
 typedef struct {
     uint32_t magic;
-    uint16_t version;
     uint32_t req_id;
     uint8_t  op;
     uint8_t  flags;
